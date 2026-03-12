@@ -1,4 +1,4 @@
-# TIM Experiment Pipeline
+# Threat Imminence Experiment Pipeline
 
 ## Overview
 Pipeline for extracting, cleaning, and analyzing continuous physiological signals:
