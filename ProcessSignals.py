@@ -80,8 +80,9 @@ def dynamic_notch_filter(data, fs, base_noise=50, max_freq=400):
         for f0 in set(target_notches):  # set() removes duplicates
             Q_dynamic = f0 / notch_width
             b, a = iirnotch(w0=f0 / (fs / 2), Q=Q_dynamic)
-            clean_data = filtfilt(b, a, clean_data)
+            clean_data = filtfilt(b, a, data)
     else:
+        clean_data = data
         print("Signal is clean of powerline harmonics. Skipping notches!")
 
     return clean_data

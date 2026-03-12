@@ -96,63 +96,61 @@ def main():
         emg_sig, hr_sig, eda_sig = signals
 
 
-        # --- PROCESS EMG ---
+        #                               --- PROCESS EMG ---
         if runEMG:
             if int(subject_id) not in skip_emg and int(subject_id) not in skip_glob :
                 print(f"Processing EMG for Subject {subject_id} idx {i}...")
 
-                freqs, psd, is_noisy, metrics = ProcessSignals.analyze_emg_psd(emg_sig, fs, False)
+                clean_emg = ProcessSignals.preprocess_emg_signal(emg_sig, fs)
+
+                freqs, psd, is_noisy, metrics = ProcessSignals.analyze_emg_psd(clean_emg, fs, False)
+
                 if not is_noisy:
-                    clean_emg = ProcessSignals.preprocess_emg_signal(emg_sig, fs)
                     emg_rows = (GetExperimentMetrics.extract_experiment_metrics
                                 (clean_emg, triggers, fs, levels_dict, signal_type='EMG'))
+
                     for row in emg_rows:
                         row['subject'] = subject_id
                         all_data_emg.append(row)
                 else:
-                    clean_emg = ProcessSignals.preprocess_emg_signal(emg_sig, fs)
-                    freqs, psd, is_noisy, metrics = ProcessSignals.analyze_emg_psd(clean_emg, fs, False)
-                    if not is_noisy:
-                        emg_rows = (GetExperimentMetrics.extract_experiment_metrics
-                                    (clean_emg, triggers, fs, levels_dict, signal_type='EMG'))
-                        for row in emg_rows:
-                            row['subject'] = subject_id
-                            all_data_emg.append(row)
-                    else:
-                        print(f"NOISY - Skipping EMG for Subject {subject_id}...")
+                    print(f"NOISY - Skipping EMG for Subject {subject_id}...")
+
             else:
                 print(f"Skipping EMG for Subject {subject_id} idx {i}...")
 
-        # --- PROCESS HR ---
+        #                               --- PROCESS HR ---
         if runECG:
             if int(subject_id) not in skip_hr and int(subject_id) not in skip_glob:
                 print(f"Processing ECG for Subject {subject_id} idx {i}...")
+
                 clean_hr, clean_ibi = ProcessSignals.preprocess_hr_signal(hr_sig, fs)
 
                 hr_rows = GetExperimentMetrics.extract_experiment_metrics(clean_hr, triggers, fs, levels_dict, signal_type='HR')
+
                 for row in hr_rows:
                     row['subject'] = subject_id
                     all_data_hr.append(row)
             else:
                 print(f"Skipping ECG for Subject {subject_id}...")
 
-        # --- PROCESS SCR (New) ---
+        #                               --- PROCESS SCR ---
         if runSCR:
             if (int(subject_id) not in skip_scr and int(subject_id) not in skip_glob ) and eda_sig is not None:
                 print(f"Processing SCR for Subject {subject_id}...")
+
                 # Decompose and get Phasic component
                 clean_scr_phasic = ProcessSignals.preprocess_scr_signal(eda_sig, fs)
 
-                # Extract metrics using the same logic (Mean of phasic)
                 scr_rows = (GetExperimentMetrics.extract_experiment_metrics
                             (clean_scr_phasic, triggers, fs, levels_dict, signal_type='SCR'))
+
                 for row in scr_rows:
                     row['subject'] = subject_id
                     all_data_scr.append(row)
             else:
                  print(f"Skipping SCR for Subject {subject_id}...")
 
-    # Export
+    # ----- Export Results -----
     def save_table(all_data, type):
         if not all_data:
             print(f"No data to save for {type}.")
