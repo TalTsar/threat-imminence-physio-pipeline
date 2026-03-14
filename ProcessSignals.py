@@ -61,7 +61,7 @@ def dynamic_notch_filter(data, fs, base_noise=50, max_freq=400):
     peaks, _ = find_peaks(psd_db, prominence=5.0)
     found_peak_freqs = freqs[peaks]
 
-    # 4. Cross-reference peaks with expected harmonics
+    # Cross-reference peaks with expected harmonics
     target_notches = []
     for peak_freq in found_peak_freqs:
         if peak_freq < 10:
@@ -73,11 +73,11 @@ def dynamic_notch_filter(data, fs, base_noise=50, max_freq=400):
             if remainder <= 2 or remainder >= (base_noise - 2):
                 target_notches.append(np.round(peak_freq))
 
-    # 5. Apply the notches ONLY if we found verified noise spikes
+    # Apply the notches only if we found verified noise spikes
     if target_notches:
         print(f"Active noise detected. Applying notches at: {target_notches} Hz")
         notch_width = 1.0
-        for f0 in set(target_notches):  # set() removes duplicates
+        for f0 in set(target_notches):
             Q_dynamic = f0 / notch_width
             b, a = iirnotch(w0=f0 / (fs / 2), Q=Q_dynamic)
             clean_data = filtfilt(b, a, data)
@@ -100,7 +100,7 @@ def analyze_emg_psd(emg_signal, fs,plotExp=False, entropy_thresh=4.0, hpr_thresh
     hpr_thresh: Maximum allowed Harmonic-to-Physiological Ratio
     kurtosis_thresh: Maximum allowed spikiness (catches massive harmonic spikes)
     """
-    # 1. Calculate PSD using Welch's method
+    # Calculate PSD using Welch's method
     freqs, psd = welch(emg_signal, fs, nperseg=int(fs / 2))
 
     # Restrict analysis strictly to the relevant EMG band (0 to 500 Hz)
@@ -108,7 +108,7 @@ def analyze_emg_psd(emg_signal, fs,plotExp=False, entropy_thresh=4.0, hpr_thresh
     f_band = freqs[valid_idx]
     p_band = psd[valid_idx]
 
-    # 2. Calculate Spectral Shape Metrics
+    # Calculate Spectral Shape Metrics
     psd_norm = p_band / np.sum(p_band)
     spec_entropy = entropy(psd_norm)
     spec_kurtosis = kurtosis(p_band)
@@ -129,7 +129,7 @@ def analyze_emg_psd(emg_signal, fs,plotExp=False, entropy_thresh=4.0, hpr_thresh
 
     hpr = noise_power / (physio_power + 1e-10)
 
-    # 3. Check for Lost Cause / Contamination - ADDED KURTOSIS
+    # Check for Lost Cause / Contamination - ADDED KURTOSIS
     is_noisy = False
     if (spec_kurtosis > kurtosis_thresh and spec_entropy < entropy_thresh) or (hpr > hpr_thresh):
         is_noisy = True
@@ -140,7 +140,7 @@ def analyze_emg_psd(emg_signal, fs,plotExp=False, entropy_thresh=4.0, hpr_thresh
         "HPR": hpr
     }
 
-    # 4. Visualization
+    # Visualization
     if plotExp:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 
@@ -178,7 +178,6 @@ def analyze_emg_psd(emg_signal, fs,plotExp=False, entropy_thresh=4.0, hpr_thresh
         ax2.set_ylabel('Amplitude')
         ax2.grid(True)
 
-        # Prevent the labels from the top plot from overlapping the title of the bottom plot
         plt.tight_layout()
         plt.show()
 
@@ -202,51 +201,15 @@ def preprocess_emg_signal(raw_emg, fs):
 
 def preprocess_hr_signal(raw_ecg, fs):
     """
-    HR Pipeline: BPF -> Clean -> Peaks -> Artifact Fix -> Interpolate
+    HR Pipelin with NeuroKit2: Clean -> Peaks -> HR calculation -> Artifact Removal
     Returns: Continuous HR (BPM) matching the original Fs
     """
-    # 1. Bandpass (5-25 Hz)
-    ecg_bpf = butter_filter(raw_ecg, fs, low=5, high=25, order=3, btype='band')
-
-    # 2. NeuroKit Cleaning & Peak Detection
-    # ecg_clean = nk.ecg_clean(ecg_bpf, sampling_rate=fs)
 
     signals, info = nk.ecg_process(raw_ecg, sampling_rate=fs)
     hr_continuous = signals['ECG_Rate'].to_numpy()
 
-    # Calculate IBI
-    r_peaks = info['ECG_R_Peaks']
-    r_ibi = np.diff(r_peaks)
-    hr_times = r_peaks[1:] / fs
 
-    full_time_axis = np.arange(len(raw_ecg)) / fs
-    interp_func = PchipInterpolator(hr_times, r_ibi, extrapolate=False)
-    ibi_continuous = interp_func(full_time_axis)
-    ibi_continuous_ms = (ibi_continuous / fs) * 1000
-
-    # ----------- DUMP -----------
-    # hr_bpm = 60 * fs / r_ibi
-    # hr_bpm_nk2 = nk.ecg_rate(r_peaks, sampling_rate=fs)
-
-    # # 4. Artifact Correction
-    # bad_mask = (hr_bpm > 140) | (hr_bpm < 40)
-    # if np.mean(bad_mask) > 0.2:
-    #     print(f"Warning: High noise detected in HR signal (>20%)")
-    #
-    # bad_indices = np.where(bad_mask)[0]
-    # for idx in bad_indices:
-    #     start_w = max(idx - 2, 0)
-    #     end_w = min(idx + 3, len(hr_bpm))
-    #     window = hr_bpm[start_w:end_w]
-    #     valid_neighbors = window[~((window > 130) | (window < 40))]
-    #     if len(valid_neighbors) > 0:
-    #         hr_bpm[idx] = np.median(valid_neighbors)
-    #     else:
-    #         hr_bpm[idx] = np.nan
-    #
-    # 5. Interpolate to create Continuous Signal (at Fs)
-
-    return hr_continuous, ibi_continuous_ms
+    return hr_continuous
 
 def preprocess_scr_signal(raw_eda, fs):
 
@@ -255,26 +218,15 @@ def preprocess_scr_signal(raw_eda, fs):
     num_samples_target = int(num_samples_original * target_fs / fs)
 
     try:
-        # print(f"   > Downsampling SCR from {fs}Hz to {target_fs}Hz for optimization...")
+
         eda_small = resample(raw_eda, num_samples_target)
 
         eda_cleaned = nk.eda_clean(eda_small, sampling_rate=target_fs)
         eda_decomposed = nk.eda_phasic(eda_cleaned, sampling_rate=target_fs, method='cvxEDA')
-        phasic_small = eda_decomposed['EDA_Phasic'].values
         tonic_small = eda_decomposed['EDA_Tonic'].values
 
         eda_global_tonic = eda_cleaned - tonic_small
 
-
-        # compare with regular nk ---> has negative values!
-        # signals, info = nk.eda_process(raw_eda, sampling_rate=fs)
-        # # We extract the continuous Phasic component
-        # nk_global = signals["EDA_Clean"].values
-        # nk_tonic = signals["EDA_Tonic"].values
-        # nk_global_tonic = nk_global - nk_tonic
-
-
-        # print("   > Upsampling SCR results back to original resolution...")
         phasic_restored = resample(eda_global_tonic, num_samples_original)
         return phasic_restored
 

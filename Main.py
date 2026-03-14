@@ -5,47 +5,19 @@ import os
 from glob import glob
 from datetime import datetime
 
-import paths
+import config
 import LoadAcq
 import ProcessSignals
 import GetExperimentMetrics
 
 
-""" ================================================================
-                        DEFINE EXPERIMENT CONFIG
-    ================================================================"""
-
-
-start_idx = 0
-loadNew = False
-
-runEMG= True
-runECG = True
-runSCR = True
-
-# Skip lists
-
-skip_glob = [384,369,424,355]
-skip_emg = [491, 397, 362, 401,402,410,411,413, 414,416]
-skip_hr = [340,352,421,434,440,459]
-skip_scr = [340,341,401,410,414]
-
-unsure=[]
-
 date = datetime.now().strftime('%d%m%Y')
-levels_dict = {21: 'Low', 41: 'Moderate', 81: 'High'}
-
 
 # Define input paths
+acqFiles = os.path.join(config.acqDataFolder, '*.acq')
+dataDir = os.path.join(config.matDataFolder, '*.mat')
 
-acqFiles = os.path.join(paths.acqDataFolder, '*.acq')
-dataDir = os.path.join(paths.matDataFolder, '*.mat')
-
-# ---- Define Biopac Channels ----
-eda_col_idx = 0
-hr_col_idx = 1
-emg_col_idx = 2
-trig_col_idx = 13
+levels_dict = config.levels_dict
 
 # ---- Initialize Result Tables -----
 all_data_emg = []
@@ -58,13 +30,13 @@ all_data_scr = []
 
 def main():
 
-    if loadNew:
+    if config.loadNew:
         LoadAcq.LoadFiles(acqFiles, dataDir)
 
     file_paths = sorted(glob(dataDir))
 
 
-    for i, file_path in enumerate(file_paths[start_idx:], start=start_idx):
+    for i, file_path in enumerate(file_paths[config.start_idx:], start=config.start_idx):
         subject_id = os.path.basename(file_path).split('_')[1]
 
         # Load Data
@@ -73,7 +45,7 @@ def main():
         fs = int(data_mat['Fs'][0][0])
 
         # triggers logic
-        triggers = raw_signals[:, trig_col_idx]
+        triggers = raw_signals[:, config.trig_col_idx]
         triggers = ProcessSignals.clean_repeated_triggers(triggers)
 
         # --- Handle Experiment Scope (Start/End) ---
@@ -86,9 +58,9 @@ def main():
 
         # Crop signals to experiment start
         triggers = triggers[start_idx_sig:end_idx_sig]
-        emg_sig = raw_signals[start_idx_sig:end_idx_sig, emg_col_idx]
-        hr_sig = raw_signals[start_idx_sig:end_idx_sig, hr_col_idx]
-        eda_sig = raw_signals[start_idx_sig:end_idx_sig, eda_col_idx]
+        emg_sig = raw_signals[start_idx_sig:end_idx_sig, config.emg_col_idx]
+        hr_sig = raw_signals[start_idx_sig:end_idx_sig, config.hr_col_idx]
+        eda_sig = raw_signals[start_idx_sig:end_idx_sig, config.eda_col_idx]
 
         # ----- Downsample Signals -----
         signals = [emg_sig, hr_sig, eda_sig]
@@ -97,8 +69,8 @@ def main():
 
 
         #                               --- PROCESS EMG ---
-        if runEMG:
-            if int(subject_id) not in skip_emg and int(subject_id) not in skip_glob :
+        if config.runEMG:
+            if int(subject_id) not in config.skip_emg and int(subject_id) not in config.skip_glob :
                 print(f"Processing EMG for Subject {subject_id} idx {i}...")
 
                 clean_emg = ProcessSignals.preprocess_emg_signal(emg_sig, fs)
@@ -119,13 +91,14 @@ def main():
                 print(f"Skipping EMG for Subject {subject_id} idx {i}...")
 
         #                               --- PROCESS HR ---
-        if runECG:
-            if int(subject_id) not in skip_hr and int(subject_id) not in skip_glob:
+        if config.runECG:
+            if int(subject_id) not in config.skip_hr and int(subject_id) not in config.skip_glob:
                 print(f"Processing ECG for Subject {subject_id} idx {i}...")
 
                 clean_hr, clean_ibi = ProcessSignals.preprocess_hr_signal(hr_sig, fs)
 
-                hr_rows = GetExperimentMetrics.extract_experiment_metrics(clean_hr, triggers, fs, levels_dict, signal_type='HR')
+                hr_rows = (GetExperimentMetrics.extract_experiment_metrics
+                           (clean_hr, triggers, fs, levels_dict, signal_type='HR'))
 
                 for row in hr_rows:
                     row['subject'] = subject_id
@@ -134,8 +107,8 @@ def main():
                 print(f"Skipping ECG for Subject {subject_id}...")
 
         #                               --- PROCESS SCR ---
-        if runSCR:
-            if (int(subject_id) not in skip_scr and int(subject_id) not in skip_glob ) and eda_sig is not None:
+        if config.runSCR:
+            if (int(subject_id) not in config.skip_scr and int(subject_id) not in config.skip_glob ) and eda_sig is not None:
                 print(f"Processing SCR for Subject {subject_id}...")
 
                 # Decompose and get Phasic component
@@ -160,11 +133,11 @@ def main():
         df.to_excel(f'TIM_{type}_{timestamp}.xlsx', index=False)
         print(f"Done saving {type}.")
 
-    if runEMG:
+    if config.runEMG:
         save_table(all_data_emg, 'EMG')
-    if runECG:
+    if config.runECG:
         save_table(all_data_hr, 'HR')
-    if runSCR:
+    if config.runSCR:
         save_table(all_data_scr, 'SCR')
 
 if __name__ == '__main__':
