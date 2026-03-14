@@ -5,28 +5,26 @@ Pipeline for extracting, cleaning, and analyzing continuous physiological signal
 Electromyography (EMG), Electrocardiogram (ECG → Heart Rate), and Electro Dermal Activity (EDA → SCR). 
 Automates metric extraction according to experiment phases.
 
-Libraries: NumPy, Pandas, Matplotlib, SciPy (signal filtering), NeuroKit2 (ECG cleaning and R-peak detection).
+Libraries: NumPy, Pandas, Matplotlib, SciPy (signal filtering), NeuroKit2 (ECG & EDA).
 
 ## Methods
 
-### 1. Heart Rate Extraction
+### 1. Heart Rate Extraction (NeuroKit2)
 
-* Filtering: 0.5Hz highpass filter
+* Filtering: 0.5Hz highpass filter.
   
-* Peak Detection: Utilized NeuroKit2 for algorithmic R-peak detection and QRS cleaning.
-
-* HR & Artifact Rejection: Calculated beat-to-beat interval (BPM). Implemented a local median-replacement algorithm to identify and correct unphysiological spikes/drops (e.g., < 40 BPM or > 140 BPM).
+* HR & Artifact Rejection: Calculated from R-Peak detection and represented in beats per minute (BPM). Local median-replacement algorithm identifies and corrects unphysiological spikes/drops ( < 40 BPM or > 140 BPM).
 
 ### 2. EMG Envelope Extraction
 
-* Noise Reduction: Applied iterative IIR Notch filtering to remove 50Hz electrical line noise and its harmonics.
+* Noise Reduction:  IIR Notch filtering to remove 50Hz electrical line noise and its harmonics.
 
-* Frequency Isolation: Utilized a 4th-order Butterworth bandpass filter (28-400Hz).
+* Frequency Isolation: 4th-order Butterworth bandpass filter (28-400Hz).
 
-* Rectification & Smoothing: Rectified and applied a 3rd-order 2Hz lowpass filter to extract the signal envelope.
+* Rectification & Smoothing: Rectification and a 3rd-order 2Hz lowpass filter to extract the signal envelope.
 
-### 3. SCR Extraction
+### 3. SCR Extraction (NeuroKit2)
 
-* Decomposition: Utilized NeuroKit 2 for decomposition of the signal to Tonic and Phasic components using convex optimization method.
+* Decomposition: Decomposition  to Tonic and Phasic components using convex optimization method.
 
 * SCR calculation: Defined as the global EDA minus tonic component
