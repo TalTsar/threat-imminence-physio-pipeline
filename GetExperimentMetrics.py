@@ -80,7 +80,12 @@ def extract_experiment_metrics(signal, triggers, fs, levels_dict, signal_type):
 
         if signal_type == 'HR':
             seg_ecg = pd.Series(full_seg)
-            full_seg,artifacts_pct,rr_len = ProcessSignals.calculate_hr_signal(seg_ecg, fs)
+            result = ProcessSignals.calculate_hr_signal(seg_ecg, fs)
+
+            if result is None:
+                continue
+
+            full_seg, rr_len = result
 
         # import viewSpecificSubjects as view
         # view.plotSigAndTrig(full_seg, full_trig, fs)

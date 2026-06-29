@@ -323,6 +323,109 @@ def calculate_hr_signal(raw_ecg, fs):
 
     clean_seg_ecg = raw_ecg.copy()
 
+
+    # -------------------------
+    # 1. R-peak detection
+    # -------------------------
+    dynamic_height = np.mean(clean_seg_ecg) + (2.8 * np.std(clean_seg_ecg))
+
+    rr_peaks, _ = find_peaks(
+        clean_seg_ecg,
+        height=dynamic_height,
+        distance=int(0.3 * fs)
+    )
+
+    rr_peaks_neg, _ = find_peaks(
+        -clean_seg_ecg,
+        height=dynamic_height,
+        distance=int(0.3 * fs)
+    )
+
+    if len(rr_peaks) < 2 and len(rr_peaks_neg) < 2:
+        print("not enough peaks")
+        return None
+
+    if len(rr_peaks_neg) > len(rr_peaks) and len(rr_peaks_neg) > 10:
+        rr_peaks = rr_peaks_neg
+
+    # -------------------------
+    # 2. IBI (heart period)
+    # -------------------------
+    ibi_sec = np.diff(rr_peaks) / fs
+    ibi_ms = ibi_sec * 1000
+
+    # ----- Artifact detection (RR-based) -----
+    med_ibi = np.median(ibi_ms)
+
+    # Define your physiological boundaries (in seconds)
+    MIN_IBI_PHYS = 350  # E.g., ~170 BPM
+    MAX_IBI_PHYS = 1500  # E.g., ~40 BPM
+
+    artifact_mask = (
+            (ibi_ms < 0.5 * med_ibi) |
+            (ibi_ms > 1.5 * med_ibi) |
+            (ibi_ms < MIN_IBI_PHYS) |
+            (ibi_ms > MAX_IBI_PHYS)
+    )
+
+    ibi_ms_corr = ibi_ms.copy()
+    ibi_ms_corr[artifact_mask] = np.median(ibi_ms_corr[~artifact_mask])
+
+
+    # assign IBI to FOLLOWING beat (paper-correct)
+    t_ibi = rr_peaks[1:] / fs
+
+    # -------------------------
+    # 3. Interpolation (10 Hz)
+    # -------------------------
+    fs_rr = 10
+
+    t_uniform = np.arange(t_ibi[0], t_ibi[-1], 1 / fs_rr)
+
+    rr_uniform = np.interp(
+        t_uniform,
+        t_ibi,
+        ibi_ms_corr
+    )
+
+    # -------------------------
+    # 4. CLEANING / SMOOTHING (important fix)
+    # -------------------------
+    if len(rr_uniform) < 21:
+        return None
+
+    # Option A (recommended): smooth low-frequency trajectory
+    rr_smooth = butter_filter(
+        rr_uniform,
+        fs=fs_rr,
+        low=0.01,
+        high=.2,  # FIX: NOT 2 Hz
+        order=3,
+        btype="band"
+    )
+
+    # -------------------------
+    # 6. Map back to full timeline (if needed)
+    # -------------------------
+    t_full = np.arange(len(raw_ecg)) / fs
+
+    rr_out = np.interp(
+        t_full,
+        t_uniform,
+        rr_smooth,
+        left=rr_smooth[0],
+        right=rr_smooth[-1]
+    )
+
+
+
+
+
+
+
+
+    clean_seg_ecg = raw_ecg.copy()
+
     dynamic_height = np.mean(clean_seg_ecg) + (2.8 * np.std(clean_seg_ecg))
     rr_peaks, properties = find_peaks(clean_seg_ecg, height=dynamic_height, distance=int(0.3 * fs))
 
@@ -368,8 +471,10 @@ def calculate_hr_signal(raw_ecg, fs):
         .median()
     )
 
+
+
     # ----- Time alignment -----
-    t_hr = (rr_peaks[1:] + rr_peaks[:-1]) / 2 / fs
+    t_hr = rr_peaks[1:] / fs
     t_full = np.arange(len(raw_ecg)) / fs
 
     last_val = hr_smooth.iloc[-1]
@@ -378,7 +483,7 @@ def calculate_hr_signal(raw_ecg, fs):
     full_seg_rr = np.interp(
         t_full,
         t_hr,
-        hr_smooth,
+        hr_series,
         left=first_val,
         right=last_val
     )
@@ -386,10 +491,11 @@ def calculate_hr_signal(raw_ecg, fs):
     rr_len = len(rr_peaks)
     if artifacts_pct > 10 or rr_len < 30:
         print(f'Num Peaks: {rr_len} ; Artifacts Percent: {artifacts_pct}')
+        return None
 
     full_seg = full_seg_rr
 
-    return full_seg, artifacts_pct,rr_len
+    return full_seg, rr_len
 
 def preprocess_scr_signal(raw_eda, fs):
 

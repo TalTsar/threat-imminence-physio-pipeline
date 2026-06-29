@@ -166,7 +166,7 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
 
     mergedTables['Val_clean'] = (
         mergedTables
-        .groupby([ 'ID','Imminence', 'Magnitude'])['Val']
+        .groupby(['Imminence', 'Magnitude'])['Val']
         .transform(winsorize_group)
     )
 
@@ -629,7 +629,7 @@ if __name__ == "__main__":
     # Configuration for each signal
     # (Signal Name, Unit Label)
     signals_to_process = [
-        ('EMG', 'Amplitude (uV)'),  #Baseline Corrected
+        # ('EMG', 'Amplitude (uV)'),  #Baseline Corrected
         ('HR', 'Heart Rate (BPM)'),
         # ('SCR', 'Phasic (√uS)')
     ]
