@@ -291,7 +291,6 @@ def analyze_emg_broadband(emg_signal, fs, plotExp=False, hf_power_thresh=1e-4, h
 
     return freqs, psd, is_noisy, metrics
 
-
 def preprocess_emg_signal(raw_emg, fs):
     """Clean EMG: Artifact Suppress -> Targeted Notches -> Bandpass -> NaN Artifacts"""
 
@@ -316,17 +315,48 @@ def preprocess_hr_signal(raw_ecg, fs):
 
     return bpf_ecg
 
-def calculate_hr_signal(raw_ecg, fs):
 
-    # signals, info = nk.ecg_process(raw_ecg, sampling_rate=fs)
-    # hr_continuous = signals['ECG_Rate'].to_numpy()
+def validate_peaks_by_template(raw_ecg, rr_peaks, fs, threshold=0.7):
+    if len(rr_peaks) < 30:
+        return rr_peaks  # Not enough peaks to reliably grab a clean template
+
+    # 1. Define a QRS window size (e.g., 100ms total -> 50ms before, 50ms after)
+    win = int(0.05 * fs)
+
+    # 2. Extract a template from a known clean zone (e.g., the 15th peak)
+    template_peak = rr_peaks[15]
+    template = raw_ecg[template_peak - win: template_peak + win]
+
+    # Double check template boundaries are safe
+    if len(template) != (2 * win):
+        return rr_peaks
+
+    valid_peaks = []
+
+    # 3. Cross-correlate every peak against the template
+    for peak in rr_peaks:
+        if peak - win < 0 or peak + win > len(raw_ecg):
+            continue
+
+        segment = raw_ecg[peak - win: peak + win]
+
+        # Calculate Pearson correlation coefficient
+        corr = np.corrcoef(template, segment)[0, 1]
+
+        # If it looks like a real QRS complex, keep it
+        if corr >= threshold:
+            valid_peaks.append(peak)
+
+    return np.array(valid_peaks)
+
+
+
+def calculate_hr_signal(raw_ecg, fs,method='hr'):
+
 
     clean_seg_ecg = raw_ecg.copy()
 
 
-    # -------------------------
-    # 1. R-peak detection
-    # -------------------------
     dynamic_height = np.mean(clean_seg_ecg) + (2.8 * np.std(clean_seg_ecg))
 
     rr_peaks, _ = find_peaks(
@@ -348,154 +378,158 @@ def calculate_hr_signal(raw_ecg, fs):
     if len(rr_peaks_neg) > len(rr_peaks) and len(rr_peaks_neg) > 10:
         rr_peaks = rr_peaks_neg
 
-    # -------------------------
-    # 2. IBI (heart period)
-    # -------------------------
-    ibi_sec = np.diff(rr_peaks) / fs
-    ibi_ms = ibi_sec * 1000
+    rr_peaks_val = validate_peaks_by_template(clean_seg_ecg, rr_peaks, fs, threshold=0.8)
 
-    # ----- Artifact detection (RR-based) -----
-    med_ibi = np.median(ibi_ms)
+    # plt.figure()
+    # # --- Plot 1: Filtered ECG ---
+    # t_full = np.arange(len(raw_ecg)) / fs
+    # plt.plot(t_full, clean_seg_ecg, label='Filtered ECG', color='teal', alpha=0.7)
+    # plt.plot(t_full[rr_peaks], clean_seg_ecg.iloc[rr_peaks], "x", label='Peaks Positive', color='red')
+    # plt.plot(t_full[rr_peaks_val], clean_seg_ecg.iloc[rr_peaks_val], "x", label='Peaks Positive', color='blue')
+    # plt.title(f'Detected R-Peaks')
+    # plt.ylabel('Amplitude')
+    # # plt.legend(loc='upper right')
+    # plt.grid(True, linestyle='--', alpha=0.5)
+    # plt.tight_layout()
+    # plt.show(block=True)
+    # plt.close()
 
-    # Define your physiological boundaries (in seconds)
-    MIN_IBI_PHYS = 350  # E.g., ~170 BPM
-    MAX_IBI_PHYS = 1500  # E.g., ~40 BPM
+    rr_peaks = rr_peaks_val
+    if len(rr_peaks) > len(rr_peaks_val):
+        print("checkpoint")
 
-    artifact_mask = (
-            (ibi_ms < 0.5 * med_ibi) |
-            (ibi_ms > 1.5 * med_ibi) |
-            (ibi_ms < MIN_IBI_PHYS) |
-            (ibi_ms > MAX_IBI_PHYS)
-    )
+    if method == 'ibi':
 
-    ibi_ms_corr = ibi_ms.copy()
-    ibi_ms_corr[artifact_mask] = np.median(ibi_ms_corr[~artifact_mask])
+        ibi_sec = np.diff(rr_peaks) / fs
+        ibi_ms = ibi_sec * 1000
+
+        # ----- Artifact detection (RR-based) -----
+        med_ibi = np.median(ibi_ms)
+
+        # Define your physiological boundaries (in seconds)
+        MIN_IBI_PHYS = 300  # E.g., ~170 BPM
+        MAX_IBI_PHYS = 1500  # E.g., ~40 BPM
+
+        artifact_mask = (
+                (ibi_ms < 0.5 * med_ibi) |
+                (ibi_ms > 1.5 * med_ibi) |
+                (ibi_ms < MIN_IBI_PHYS) |
+                (ibi_ms > MAX_IBI_PHYS)
+        )
+
+        ibi_ms_corr = ibi_ms.copy()
+        ibi_ms_corr[artifact_mask] = np.median(ibi_ms_corr[~artifact_mask])
+
+        signal = ibi_ms_corr
 
 
-    # assign IBI to FOLLOWING beat (paper-correct)
-    t_ibi = rr_peaks[1:] / fs
+    elif method == 'hr':
+        rr_diff = np.diff(rr_peaks)
+        rr_sec = rr_diff / fs
 
-    # -------------------------
-    # 3. Interpolation (10 Hz)
-    # -------------------------
-    fs_rr = 10
+        # Convert to a pandas Series to easily use rolling windows
+        rr_series = pd.Series(rr_sec)
 
-    t_uniform = np.arange(t_ibi[0], t_ibi[-1], 1 / fs_rr)
+        # 1. Compute a rolling local median (window of 11 beats centers it nicely)
+        # min_periods=1 ensures it still calculates values near the edges
+        local_med_rr = rr_series.rolling(window=9, center=True, min_periods=1).median().to_numpy()
 
-    rr_uniform = np.interp(
+        # 2. Calculate relative percentage change between consecutive beats
+        consecutive_diffs = np.abs(np.diff(rr_sec))
+        pct_change = np.zeros_like(rr_sec)
+        pct_change[1:] = consecutive_diffs / rr_sec[:-1]
+
+        # 3. Hard physiological limits
+        MIN_RR_PHYS = 0.3  # ~200 BPM
+        MAX_RR_PHYS = 1.5  # ~40 BPM
+        MAX_PCT_CHANGE = .5  # Allow up to a 25% instantaneous jump
+
+        # 4. Build the mask using the LOCAL median instead of the global one
+        artifact_mask = (
+                (rr_sec < 0.50 * local_med_rr) |  # Back to a reasonable threshold, but local!
+                (rr_sec > 1.50 * local_med_rr) |
+                (rr_sec < MIN_RR_PHYS) |
+                (rr_sec > MAX_RR_PHYS)
+        )
+
+        # Flag the trailing edge of a single sharp spike if necessary
+        artifact_mask[:-1] = artifact_mask[:-1] | (pct_change[1:] > MAX_PCT_CHANGE)
+
+        # Convert mask to numpy boolean array
+        artifact_mask = np.array(artifact_mask, dtype=bool)
+
+        rr_sec_corr = rr_sec.copy()
+        rr_sec_corr[artifact_mask] = np.nan
+
+        artifacts_pct = (np.sum(artifact_mask) * 100) / len(artifact_mask)
+        print(f"Artifacts Percent: {artifacts_pct:.2f}%")
+
+        if artifacts_pct >= 70: # should not even bother with interpolation
+            return None
+
+
+        hr_bpm = 60 / rr_sec_corr
+        signal = hr_bpm
+
+        # Calculate midpoints for peak times
+    t_pks = (rr_peaks[1:] + rr_peaks[:-1]) / 2 / fs
+
+    # 3. Create a boolean mask tracking only the true, clean data points
+    valid_mask = ~np.isnan(signal)
+
+    fs_rr = 1000
+    t_uniform = np.arange(t_pks[0], t_pks[-1], 1 / fs_rr)
+
+    # 4. Interpolate ONLY using the valid times and signals
+    signal_uniform = np.interp(
         t_uniform,
-        t_ibi,
-        ibi_ms_corr
+        t_pks[valid_mask],  # Drops the bad time coordinates
+        signal[valid_mask]  # Drops the bad HR coordinates
     )
 
-    # -------------------------
-    # 4. CLEANING / SMOOTHING (important fix)
-    # -------------------------
-    if len(rr_uniform) < 21:
+    if len(signal_uniform) < 21:
         return None
 
-    # Option A (recommended): smooth low-frequency trajectory
-    rr_smooth = butter_filter(
-        rr_uniform,
-        fs=fs_rr,
-        low=0.01,
-        high=.2,  # FIX: NOT 2 Hz
-        order=3,
-        btype="band"
-    )
+    if method == 'ibi':
+        signal_smooth = butter_filter(signal_uniform, fs=fs_rr,
+                                  low=0.01, high=.2, order=3, btype="band")
+    else:
+        signal_smooth = signal_uniform
 
-    # -------------------------
-    # 6. Map back to full timeline (if needed)
-    # -------------------------
-    t_full = np.arange(len(raw_ecg)) / fs
-
-    rr_out = np.interp(
-        t_full,
-        t_uniform,
-        rr_smooth,
-        left=rr_smooth[0],
-        right=rr_smooth[-1]
-    )
-
-
-
-
-
-
-
-
-    clean_seg_ecg = raw_ecg.copy()
-
-    dynamic_height = np.mean(clean_seg_ecg) + (2.8 * np.std(clean_seg_ecg))
-    rr_peaks, properties = find_peaks(clean_seg_ecg, height=dynamic_height, distance=int(0.3 * fs))
-
-    rr_peaks_neg, properties_neg = find_peaks(-clean_seg_ecg, height=dynamic_height, distance=int(0.3 * fs))
-
-    if len(rr_peaks) < 2 and len(rr_peaks_neg) < 2:
-        print('not enough peaks')
-        return
-
-    if len(rr_peaks_neg) > len(rr_peaks) and len(rr_peaks_neg) > 10:
-        rr_peaks = rr_peaks_neg
-        properties = properties_neg
-
-    rr_diff = np.diff(rr_peaks)
-    rr_sec = rr_diff / fs
-
-    # ----- Artifact detection (RR-based) -----
-    med_rr = np.median(rr_sec)
-
-    # Define your physiological boundaries (in seconds)
-    MIN_RR_PHYS = 0.35  # E.g., ~170 BPM
-    MAX_RR_PHYS = 1.50  # E.g., ~40 BPM
-
-    artifact_mask = (
-            (rr_sec < 0.5 * med_rr) |
-            (rr_sec > 1.5 * med_rr) |
-            (rr_sec < MIN_RR_PHYS) |
-            (rr_sec > MAX_RR_PHYS)
-    )
-
-    rr_sec_corr = rr_sec.copy()
-    rr_sec_corr[artifact_mask] = np.median(rr_sec_corr[~artifact_mask])
-
-    artifacts_pct = (np.sum(artifact_mask) * 100) / len(artifact_mask)
-
-    hr_bpm = 60 / rr_sec_corr
-
-    hr_series = pd.Series(hr_bpm)
-    hr_smooth = (
-        hr_series
-        .interpolate(limit_direction="both")
-        .rolling(window=3, center=True, min_periods=1)  # min_periods handles the edges
-        .median()
-    )
-
-
-
-    # ----- Time alignment -----
-    t_hr = rr_peaks[1:] / fs
-    t_full = np.arange(len(raw_ecg)) / fs
-
-    last_val = hr_smooth.iloc[-1]
-    first_val = hr_smooth.iloc[0]
-
-    full_seg_rr = np.interp(
-        t_full,
-        t_hr,
-        hr_series,
-        left=first_val,
-        right=last_val
-    )
 
     rr_len = len(rr_peaks)
-    if artifacts_pct > 10 or rr_len < 30:
+    if artifacts_pct > 20 or rr_len < 30:
         print(f'Num Peaks: {rr_len} ; Artifacts Percent: {artifacts_pct}')
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=False)
+
+        # --- Plot 1: ECG + peaks ---
+        t_full = np.arange(len(raw_ecg)) / fs
+
+        ax1.plot(t_full, clean_seg_ecg, label='Filtered ECG', color='teal', alpha=0.7)
+        ax1.plot(t_full[rr_peaks], clean_seg_ecg.iloc[rr_peaks], "x", color='red', label='Peaks')
+        ax1.set_title('Detected R-Peaks')
+        ax1.set_ylabel('Amplitude')
+        ax1.grid(True, linestyle='--', alpha=0.5)
+
+        # --- Plot 2: Smooth signal ---
+        ax2.plot(t_uniform, signal_smooth, color='purple', label='Smooth Signal')
+        ax2.set_title('Smooth Signal')
+        ax2.set_ylabel('HR / Signal')
+        ax2.set_xlabel('Time (s)')
+        ax2.grid(True, linestyle='--', alpha=0.5)
+
+        plt.tight_layout()
+        plt.show()
+        plt.close()
+
+
         return None
 
-    full_seg = full_seg_rr
+    return signal_smooth, rr_len
 
-    return full_seg, rr_len
+
+
 
 def preprocess_scr_signal(raw_eda, fs):
 

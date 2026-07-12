@@ -229,8 +229,303 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
     df_heat['Magnitude'] = df_heat['Magnitude'].astype('category') # Ensure 'Magnitude' categorical
 
 
+    # =========================================================
+    # HEAT PHASE: DIFFERENCE SCORES & OUTLIER-CLEANED CI
+    # =========================================================
+    print("\n=== HEAT DIFFERENCES & CONFIDENCE INTERVALS (3SD CLEANED) ===")
 
 
+    # 1. Get the mean Val_clean for each subject and condition
+    df_heat_subj = df_heat.groupby(['ID', 'Magnitude'], as_index=False, observed=True)['Val_clean'].mean()
+
+    # 2. Pivot the table so Magnitudes become columns
+    df_heat_pivot = df_heat_subj.pivot(index='ID', columns='Magnitude', values='Val_clean').reset_index()
+
+    # 3. Calculate raw differences (Normal - Black)
+    df_heat_pivot['Diff_Low'] = df_heat_pivot['Low'] - df_heat_pivot['Low-Black']
+    df_heat_pivot['Diff_High'] = df_heat_pivot['High'] - df_heat_pivot['High-Black']
+
+    import scipy.stats as stats
+
+    for col_name in ['Diff_Low', 'Diff_High']:
+        # Grab raw difference values (dropping NaNs if a subject is missing data)
+        raw_series = df_heat_pivot[col_name].dropna()
+
+        # Calculate initial mean and standard deviation for outlier boundaries
+        m_initial = raw_series.mean()
+        sd_initial = raw_series.std()
+
+        # Define 3SD threshold boundaries
+        # Note: This is standard two-tailed filtering (+/- 3SD).
+        # If you strictly want to exclude ONLY values above the upper limit,
+        # change the mask below to: raw_series <= m_initial + (3 * sd_initial)
+        lower_bound = m_initial - (3 * sd_initial)
+        upper_bound = m_initial + (3 * sd_initial)
+
+        # Filter out the outliers
+        cleaned_series = raw_series[(raw_series >= lower_bound) & (raw_series <= upper_bound)]
+        excluded_count = len(raw_series) - len(cleaned_series)
+
+        # Calculate final descriptives and Standard Error of the Mean (SEM)
+        n_clean = len(cleaned_series)
+        mean_clean = cleaned_series.mean()
+        sem_clean = cleaned_series.sem()
+
+        # Compute 95% Confidence Interval using the t-distribution
+        if n_clean > 1:
+            ci_lower, ci_upper = stats.t.interval(0.95, df=n_clean - 1, loc=mean_clean, scale=sem_clean)
+        else:
+            ci_lower, ci_upper = np.nan, np.nan
+
+        print(f"\n--- {col_name} ---")
+        print(f"  Total Subjects: {len(raw_series)} (Excluded {excluded_count} outlier(s) outside 3SD)")
+        print(f"  Cleaned Mean:   {mean_clean:.4f}")
+        print(f"  95% CI:         [{ci_lower:.4f}, {ci_upper:.4f}]")
+
+
+    # =========================================================
+    # PLOT: DIFFERENCE SCORES (STRIP + POINTPLOT)
+    # =========================================================
+    import scipy.stats as stats
+
+    # 1. Isolate and clean the difference data using the 3SD rule
+    cleaned_diffs = []
+    for col_name in ['Diff_Low', 'Diff_High']:
+        raw_series = df_heat_pivot[[col_name, 'ID']].dropna()
+
+        m_init = raw_series[col_name].mean()
+        sd_init = raw_series[col_name].std()
+
+        # Apply 3SD Filter
+        cleaned_subset = raw_series[
+            (raw_series[col_name] >= m_init - 3 * sd_init) &
+            (raw_series[col_name] <= m_init + 3 * sd_init)
+            ]
+
+        # Format into a long-form structure for Seaborn
+        for _, row in cleaned_subset.iterrows():
+            cleaned_diffs.append({
+                'ID': row['ID'],
+                'Contrast': 'Low vs Low-Black' if col_name == 'Diff_Low' else 'High vs High-Black',
+                'Difference': row[col_name]
+            })
+
+    df_plot_diff = pd.DataFrame(cleaned_diffs)
+
+    # 2. Generate the plot using your exact formatting layout
+    plt.figure(figsize=(6, 4))
+
+    # Reference Line at 0 to easily visualize statistical significance
+    plt.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.7, zorder=0)
+
+    # Custom palette dictionary matching your long-form labels
+    DIFF_ORDER = ['Low vs Low-Black', 'High vs High-Black']
+    DIFF_PALETTE = {
+        'Low vs Low-Black': PALETTE.get('Low', '#1f77b4'),
+        'High vs High-Black': PALETTE.get('High', '#ff7f0e')
+    }
+
+    # Point plot (Mean + 95% Bootstrapped CI)
+    sns.pointplot(
+        data=df_plot_diff,
+        x='Contrast',
+        y='Difference',
+        hue='Contrast',
+        legend=False,
+        order=DIFF_ORDER,
+        palette='dark:black',
+        errorbar=('ci', 95),
+        linestyle='none',
+        capsize=0.1,
+        zorder=4
+    )
+
+    # Strip plot (Individual Cleaned Subject Differences)
+    sns.stripplot(
+        data=df_plot_diff,
+        x='Contrast',
+        y='Difference',
+        hue='Contrast',
+        legend=False,
+        order=DIFF_ORDER,
+        palette=DIFF_PALETTE,
+        jitter=True,
+        alpha=0.6,
+        size=6,
+        zorder=3
+    )
+
+    # Formatting and layout titles
+    plt.title(f'{signal_type}: Heat Difference Scores (± 95% CI)')
+    plt.ylabel(f'Δ Mean {unit_label} (Regular - Black)')
+    plt.xlabel('Condition Contrast')
+
+    # Adjust axes constraints for clean visuals
+    ax = plt.gca()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.yaxis.grid(True, linestyle=':', alpha=0.5, zorder=0)
+
+    plt.tight_layout()
+    plt.show(block=True)
+
+    # =========================================================
+    # TIME-BIN SHIFTS: ISOLATE AND PIVOT BINS (INCLUDING BIN 6)
+    # =========================================================
+    print("\n=== ALL TIME BIN DIFFERENCES & CONFIDENCE INTERVALS (3SD CLEANED) ===")
+
+    # 1. Filter dataset down to the relevant time bins: 1, 4, 5, and 6
+    df_time = mergedTables[mergedTables['Imminence'].isin([1, 4, 5, 6])].copy()
+
+    # 2. Get the clean target mean for each subject, magnitude condition, and time bin
+    df_time_subj = df_time.groupby(['ID', 'Magnitude', 'Imminence'], as_index=False, observed=True)['Val_clean'].mean()
+
+    # 3. Pivot the table so Imminence Bins become distinct columns
+    df_time_pivot = df_time_subj.pivot(
+        index=['ID', 'Magnitude'],
+        columns='Imminence',
+        values='Val_clean'
+    ).reset_index()
+
+    # Rename columns for clear math operations
+    df_time_pivot = df_time_pivot.rename(columns={1: 'Bin1', 4: 'Bin4', 5: 'Heat14', 6: 'Heat48'})
+
+    # 4. Calculate all raw time-wise difference metrics per subject per condition
+    df_time_pivot['Diff_4_minus_1'] = df_time_pivot['Bin4'] - df_time_pivot['Bin1']
+    df_time_pivot['Diff_4_minus_5'] = df_time_pivot['Bin4'] - df_time_pivot['Heat14']
+    df_time_pivot['Diff_4_minus_6'] = df_time_pivot['Bin4'] - df_time_pivot['Heat48']
+    df_time_pivot['Diff_5_minus_6'] = df_time_pivot['Heat14'] - df_time_pivot['Heat48']
+
+    # =========================================================
+    # STATISTICAL SUMMARIES & OUTLIER FILTERING
+    # =========================================================
+    import scipy.stats as stats
+
+    cleaned_time_diffs = []
+    diff_columns = ['Diff_4_minus_1', 'Diff_4_minus_5', 'Diff_4_minus_6', 'Diff_5_minus_6']
+
+    # Map your calculation columns to the EXACT names you want displayed on your graph panels
+    contrast_label_map = {
+        'Diff_4_minus_1': 'Bin 4 - Bin 1',
+        'Diff_4_minus_5': 'Bin 4 - Heat14',
+        'Diff_4_minus_6': 'Bin 4 - Heat48',
+        'Diff_5_minus_6': 'Heat14 - Heat48'
+    }
+
+    for col_name in diff_columns:
+        print(f"\n--- METRIC: {col_name} ---")
+
+        # Process each condition independently for accurate standard deviation thresholds
+        for mag in ORDER:
+            subset_raw = df_time_pivot[df_time_pivot['Magnitude'] == mag][[col_name, 'ID']].dropna()
+
+            if subset_raw.empty:
+                continue
+
+            m_initial = subset_raw[col_name].mean()
+            sd_initial = subset_raw[col_name].std()
+
+            # 3SD threshold boundaries
+            lower_bound = m_initial - (3 * sd_initial)
+            upper_bound = m_initial + (3 * sd_initial)
+
+            # Filter out condition outliers
+            cleaned_series = subset_raw[(subset_raw[col_name] >= lower_bound) & (subset_raw[col_name] <= upper_bound)]
+            excluded_count = len(subset_raw) - len(cleaned_series)
+
+            # Final descriptives and 95% Confidence Interval
+            n_clean = len(cleaned_series)
+            mean_clean = cleaned_series[col_name].mean()
+            sem_clean = cleaned_series[col_name].sem()
+
+            if n_clean > 1:
+                ci_lower, ci_upper = stats.t.interval(0.95, df=n_clean - 1, loc=mean_clean, scale=sem_clean)
+            else:
+                ci_lower, ci_upper = np.nan, np.nan
+
+            print(f"  [{mag}] Subjects: {len(subset_raw)} (Excluded {excluded_count} outside 3SD)")
+            print(f"    Cleaned Mean: {mean_clean:.4f}")
+            print(f"    95% CI:       [{ci_lower:.4f}, {ci_upper:.4f}]")
+
+            # Format into long-form dataframe structure for seaborn plotting
+            for _, row in cleaned_series.iterrows():
+                cleaned_time_diffs.append({
+                    'ID': row['ID'],
+                    'Magnitude': mag,
+                    'Contrast': contrast_label_map[col_name],  # Pulls the exact respectable string layout
+                    'Difference': row[col_name]
+                })
+
+    df_plot_time = pd.DataFrame(cleaned_time_diffs)
+
+    # =========================================================
+    # PLOT: 1x4 TIME PANEL GRID COMPARED BY CONDITION
+    # =========================================================
+    PANEL_ORDER = ['Bin 4 - Bin 1', 'Bin 4 - Heat14', 'Bin 4 - Heat48', 'Heat14 - Heat48']
+
+    g = sns.FacetGrid(
+        df_plot_time,
+        col='Contrast',
+        col_order=PANEL_ORDER,
+        height=4.5,
+        aspect=1.0,
+        sharey=False  # Free axes allow recovery scales to scale to their localized variance cleanly
+    )
+
+    def plot_strip_and_point(data, **kws):
+        ax = plt.gca()
+
+        # Horizontal reference line at zero
+        ax.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.7, zorder=0)
+
+        # Strip plot for individual clean observations
+        sns.stripplot(
+            data=data,
+            x='Magnitude',
+            y='Difference',
+            hue='Magnitude',
+            order=ORDER,
+            palette=PALETTE,
+            jitter=True,
+            alpha=0.5,
+            size=4.5,
+            legend=False,
+            ax=ax,
+            zorder=2
+        )
+
+        # Overlaid summary Point plot (Mean + Bootstrapped 95% Confidence Intervals)
+        sns.pointplot(
+            data=data,
+            x='Magnitude',
+            y='Difference',
+            hue='Magnitude',
+            order=ORDER,
+            palette='dark:black',
+            errorbar=('ci', 95),
+            linestyle='none',
+            capsize=0.15,
+            legend=False,
+            ax=ax,
+            zorder=3
+        )
+
+        # Active panel aesthetics formatting
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
+        ax.yaxis.grid(True, linestyle=':', alpha=0.5, zorder=0)
+
+    # Map the drawing logic onto the grid layout panels
+    g.map_dataframe(plot_strip_and_point)
+
+    # Final formatting updates
+    g.set_titles("{col_name}")
+    g.set_axis_labels("Condition", f"Δ Mean {unit_label}")
+    g.fig.suptitle(f'{signal_type}: Comprehensive Time-Bin Transitions (± 95% CI)', y=1.06, fontsize=13)
+
+    plt.tight_layout()
+    plt.show(block=True)
     # =========================================================
     # STAT ANALYSIS: Anticipation
     # =========================================================
@@ -323,14 +618,74 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
     # =========================================================
     # PLOT : Imminence Random Slopes & Anxiety Scores
     # =========================================================
-    sns.scatterplot(data = df_subj,x='slope_clean',y='GAD7_Total')
-    plt.show()
+        # =========================================================
+        # PLOT : Imminence Random Slopes & Anxiety Scores (Publication Quality)
+        # =========================================================
+        from scipy.stats import pearsonr
+        import matplotlib.transforms as transforms
 
-    sns.scatterplot(data = df_subj,x='slope_clean',y='STAIT_Total')
-    plt.show()
+        # Define the pairs we want to plot along with their display labels
+        anxiety_vars = [
+            ('GAD7_Total', 'GAD-7 Total Score'),
+            ('STAIT_Total', 'STAI-T Total Score'),
+            ('IUS_Total', 'IUS Total Score')
+        ]
 
-    sns.scatterplot(data = df_subj,x='slope_clean',y='IUS_Total')
-    plt.show()
+        for y_var, y_label in anxiety_vars:
+            # Drop any missing rows between the two specific variables being plotted
+            plot_df = df_subj[['slope_clean', y_var]].dropna()
+
+            N = len(plot_df)
+            if N < 3:
+                print(f"Skipping plot for {y_var}: insufficient data points (N={N}).")
+                continue
+
+            # Compute the exact Pearson correlation stats
+            r_val, p_val = pearsonr(plot_df['slope_clean'], plot_df[y_var])
+
+            # Initialize the figure matching your theme proportions
+            plt.figure(figsize=(5.5, 4.5))
+
+            # Plot the individual points and the linear regression line with its 95% CI band
+            sns.regplot(
+                data=plot_df,
+                x='slope_clean',
+                y=y_var,
+                scatter_kws={'alpha': 0.6, 's': 40, 'color': '#1f77b4'},  # Styled translucent points
+                line_kws={'color': 'black', 'linewidth': 1.5},  # Clean, crisp regression line
+                ci=95  # 95% Confidence Interval band
+            )
+
+            # Format statistical output text string
+            # Formats p-values using standard scientific thresholding (e.g., p < .001)
+            p_string = f"p < .001" if p_val < 0.001 else f"p = {p_val:.3f}"
+            stats_text = f"N = {N}\nr = {r_val:.2f}\n{p_string}"
+
+            # Insert a clean text box in the upper-right corner of the plot coordinates
+            props = dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='gainsboro', alpha=0.9)
+            plt.gca().text(
+                0.95, 0.95, stats_text,
+                transform=plt.gca().transAxes,
+                fontsize=10,
+                verticalalignment='top',
+                horizontalalignment='right',
+                bbox=props,
+                fontfamily='monospace'  # Keeps statistics clean and vertically aligned
+            )
+
+            # Final layout aesthetics formatting
+            # plt.title(f'{signal_type}: Random Slope vs. {y_label}', fontsize=11, pad=12, fontweight='bold')
+            plt.xlabel(f'Random Slope: Imminence', fontsize=10, labelpad=8)
+            plt.ylabel(y_label, fontsize=10, labelpad=8)
+
+            # Clean axis spines
+            ax = plt.gca()
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.grid(True, linestyle=':', alpha=0.4)
+
+            plt.tight_layout()
+            plt.show(block=True)
 
 
     # =========================================================
@@ -629,7 +984,7 @@ if __name__ == "__main__":
     # Configuration for each signal
     # (Signal Name, Unit Label)
     signals_to_process = [
-        # ('EMG', 'Amplitude (uV)'),  #Baseline Corrected
+        ('EMG', 'Amplitude (uV)'),  #Baseline Corrected
         ('HR', 'Heart Rate (BPM)'),
         # ('SCR', 'Phasic (√uS)')
     ]

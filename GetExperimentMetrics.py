@@ -18,8 +18,8 @@ def get_metric(segment, signal_type, fs):
         segment = segment * 1000
         pad_width = int(3 * fs / 5)  # depends on filter length
         segment = np.pad(segment, pad_width, mode='reflect')
-
         envelope = ProcessSignals.butter_filter(np.abs(segment), fs, low=5, order=3, btype='low')
+
         return np.median(envelope)
 
     elif signal_type == 'HR':
@@ -80,12 +80,15 @@ def extract_experiment_metrics(signal, triggers, fs, levels_dict, signal_type):
 
         if signal_type == 'HR':
             seg_ecg = pd.Series(full_seg)
-            result = ProcessSignals.calculate_hr_signal(seg_ecg, fs)
+            result = ProcessSignals.calculate_hr_signal(seg_ecg, fs,'hr')
 
             if result is None:
                 continue
 
             full_seg, rr_len = result
+
+
+
 
         # import viewSpecificSubjects as view
         # view.plotSigAndTrig(full_seg, full_trig, fs)
@@ -96,6 +99,10 @@ def extract_experiment_metrics(signal, triggers, fs, levels_dict, signal_type):
         # pre_ITI = get_metric(baseline_seg, signal_type, fs)
 
         baseline_val = get_metric(full_seg[int(fs * 4):int(fs * 8)], signal_type, fs) # Fixation
+
+        if baseline_val is None:
+            print('Skipping segment')
+            continue
 
         # Helper to get value and correct baseline
         def calc_val(seg):

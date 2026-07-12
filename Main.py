@@ -105,7 +105,6 @@ def main():
 
         #                               --- PROCESS HR ---
         if config.runECG:
-
             print(f"Processing ECG for Subject {subject_id} idx {i}...")
 
             clean_ecg = ProcessSignals.preprocess_hr_signal(hr_sig, fs)
