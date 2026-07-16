@@ -153,7 +153,7 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
     # ----------- Stats with Demog -----------
     if DEMOG:
         demog = pd.read_excel(DEMOG)
-        mergedTables = df.merge(demog, left_on='ID', right_on='Sub_ID')
+        mergedTables = df.merge(demog[['Sub_ID','Gender','gender_numeric','Age','GAD7_total','STAI_total','PHQ9_total','PCL5_total','IUS_total']], left_on='ID', right_on='Sub_ID')
         mergedTables = mergedTables.drop(columns='Sub_ID')
 
         p=Path(file_path)
@@ -541,7 +541,7 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
 
         # 2. Format your grouping and categorical variables
         df_clean['ID'] = df_clean['ID'].astype('string')
-        df_clean['Gender'] = df_clean['Gender'].astype('category')
+        df_clean['gender_numeric'] = df_clean['gender_numeric'].astype('category')
 
         # 3. Mean-center your continuous predictors
         # df_clean['Magnitude_c'] = df_clean['Magnitude'] - df_clean['Magnitude'].mean()
@@ -549,7 +549,7 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
         # df_clean['Imminence_c2'] = df_clean['Imminence_c'] ** 2
 
         # 4. Run the model
-        formula = f'{target} ~ Magnitude_H_L_B * Imminence_c + Block + Age + Gender'
+        formula = f'{target} ~ Magnitude_H_L_B * Imminence_c + Block + Age + gender_numeric'
 
         try:
             res,df_with_slopes = run_lme(
@@ -566,7 +566,7 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
 
         # -------- Heat Model --------
 
-        formula = f'{target} ~ Magnitude + Block + Age + Gender'
+        formula = f'{target} ~ Magnitude + Block + Age + gender_numeric'
 
         res = run_lme(
             df_heat,
@@ -587,7 +587,7 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
             # ----------- GAD7 -----------
             r, p = pearsonr(
                 df_subj['slope_clean'],
-                df_subj['GAD7_Total']
+                df_subj['GAD7_total']
             )
 
 
@@ -626,9 +626,11 @@ def run_analysis_pipeline(signal_type, file_path, unit_label):
 
         # Define the pairs we want to plot along with their display labels
         anxiety_vars = [
-            ('GAD7_Total', 'GAD-7 Total Score'),
-            ('STAIT_Total', 'STAI-T Total Score'),
-            ('IUS_Total', 'IUS Total Score')
+            ('GAD7_total', 'GAD-7 Total Score'),
+            ('STAI_total', 'STAI-T Total Score'),
+            ('IUS_total', 'IUS Total Score'),
+            ('PCL5_total', 'PCL-5 Total Score'),
+            ('PHQ9_total', 'PHQ-9 Total Score')
         ]
 
         for y_var, y_label in anxiety_vars:
